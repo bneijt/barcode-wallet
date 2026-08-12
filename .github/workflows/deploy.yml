@@ -1,0 +1,39 @@
+name: Build & Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (wasm32 target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install trunk
+        uses: jetli/trunk-action@v0.5.0
+        with:
+          version: "v0.21.14"
+
+      - name: Build
+        run: trunk build --release
+
+      - name: Deploy to Bunny.net storage
+        uses: jakejarvis/s3-sync-action@v0.5.1
+        with:
+          args: --acl public-read --follow-symlinks --delete
+        env:
+          AWS_IGNORE_CONFIGURED_ENDPOINT_URLS: true
+          AWS_S3_BUCKET: ${{ secrets.BUNNY_BUCKET }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.BUNNY_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.BUNNY_SECRET_ACCESS_KEY }}
+          AWS_S3_ENDPOINT: "https://de-s3.storage.bunnycdn.com"
+          SOURCE_DIR: "dist"

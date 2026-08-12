@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#111111" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="canonical" href="https://barcode-wallet.bneijt.nl/" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/favicon.svg" />
+    <link data-trunk rel="copy-file" href="static/error.html" />
+    <link data-trunk rel="copy-file" href="static/sw.js" />
+    <link data-trunk rel="copy-file" href="static/manifest.webmanifest" />
+    <link data-trunk rel="copy-file" href="static/favicon.svg" />
+    <link data-trunk rel="copy-file" href="static/icon-192.png" />
+    <link data-trunk rel="copy-file" href="static/icon-512.png" />
+    <link data-trunk rel="copy-file" href="static/screenshot.png" />
+    <link data-trunk rel="css" href="static/styles.css" />
+    <link data-trunk rel="rust" />
+    <title>Barcode Wallet</title>
+  </head>
+  <body>
+    <div id="app">
+      <div class="no-wasm">
+        <h1>Barcode Wallet</h1>
+        <p>This app needs WebAssembly to run. Your browser does not appear to support it, or the code failed to load.</p>
+        <p>Try a current version of Chrome, Firefox, Safari, or Edge.</p>
+      </div>
+      <noscript>
+        <div class="no-wasm">
+          <h1>Barcode Wallet</h1>
+          <p>JavaScript is disabled. Please enable JavaScript to use this app.</p>
+        </div>
+      </noscript>
+    </div>
+  </body>
+</html>
