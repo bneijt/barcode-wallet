@@ -14,9 +14,29 @@ pub struct Decoded {
 }
 
 /// Decode a barcode from raw image bytes (PNG/JPEG).
+///
+/// Tries the plain reader first, then the filtered reader, which rescales and
+/// re-binarizes the image. The filtered pass rescues tightly printed barcodes
+/// whose narrowest bar is about one pixel wide: at that density the binarizer
+/// cannot place an edge reliably and the plain reader finds nothing.
 pub fn decode_from_bytes(bytes: &[u8]) -> Result<Decoded, String> {
-    let result = rxing::helpers::detect_in_buffer(bytes, None)
-        .map_err(|_| "no barcode found in image".to_string())?;
+    let img =
+        image::load_from_memory(bytes).map_err(|_| "could not read this image file".to_string())?;
+
+    if let Ok(result) = rxing::helpers::detect_in_image_with_hints(
+        img.clone(),
+        None,
+        &mut rxing::DecodeHints::default(),
+    ) {
+        return decoded_from_result(&result);
+    }
+
+    let result = rxing::helpers::detect_in_image_filtered_with_hints(
+        img,
+        None,
+        &mut rxing::DecodeHints::default(),
+    )
+    .map_err(|_| "no barcode found in image".to_string())?;
     decoded_from_result(&result)
 }
 
@@ -74,7 +94,7 @@ fn decoded_from_result(result: &rxing::RXingResult) -> Result<Decoded, String> {
             return Err(format!(
                 "this barcode type is not supported yet ({})",
                 format_name(other)
-            ))
+            ));
         }
     };
 

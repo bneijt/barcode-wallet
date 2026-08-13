@@ -26,7 +26,9 @@ const CASES: &[(&str, barcode_wallet::model::Symbology, &str)] = &[
     (
         "tests/resources/MSC128A.png",
         barcode_wallet::model::Symbology::Code128,
-        "1234567890",
+        // Start B, FNC1, then these 18 digits. Verified independently with
+        // `zbarimg`; the checksum symbol in the image (40) matches this value.
+        "123456789012345678",
     ),
 ];
 
