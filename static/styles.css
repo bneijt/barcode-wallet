@@ -469,12 +469,24 @@ button {
   padding: 16px;
 }
 
-.scan-view video {
+/* The live camera feed, shown as-is so the browser composites it. */
+.camera-preview {
   width: 100%;
   max-width: 480px;
   border-radius: 14px;
   background: #000;
-  transform: scaleX(-1);
+}
+
+/* Scratch buffer for frame capture: never shown, but must stay in the layout
+   so the browser keeps its backing store. */
+.camera-scratch {
+  position: absolute;
+  left: -10000px;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .scan-view .btn,

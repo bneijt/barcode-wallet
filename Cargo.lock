@@ -209,6 +209,7 @@ dependencies = [
  "console_log",
  "gloo-timers",
  "gloo-utils",
+ "image",
  "indexed_db_futures",
  "js-sys",
  "leptos",

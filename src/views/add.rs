@@ -8,7 +8,6 @@ use leptos::html::{Input, Video};
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use wasm_bindgen::JsCast;
-use wasm_bindgen::prelude::Closure;
 
 #[component]
 pub fn Add(initial_method: AddMethod) -> impl IntoView {
@@ -62,10 +61,10 @@ pub fn Add(initial_method: AddMethod) -> impl IntoView {
         let error = error.clone();
         let pending = pending.clone();
         move |_| {
-            let n = name.get();
-            let c = color.get();
-            let v = value.get().trim().to_string();
-            let s = symbology.get();
+            let n = name.get_untracked();
+            let c = color.get_untracked();
+            let v = value.get_untracked().trim().to_string();
+            let s = symbology.get_untracked();
             let code = Code {
                 value: v,
                 symbology: s,
@@ -187,164 +186,239 @@ fn CameraCapture(
     on_error: Callback<String>,
 ) -> impl IntoView {
     let video_ref = NodeRef::<Video>::new();
+    let preview_ref = NodeRef::<leptos::html::Canvas>::new();
     let started = RwSignal::new(false);
     let scanning = RwSignal::new(true);
-    let on_decoded = on_decoded;
-    let on_error = on_error;
+    let stream_holder = RwSignal::new(None::<web_sys::MediaStream>);
+    // Set when the component is torn down. Every loop and every waiting task
+    // checks this so nothing keeps running after the view is gone.
+    let cancelled = RwSignal::new(false);
 
     let start = move |_| {
         started.set(true);
         scanning.set(true);
     };
 
-    // Begin camera + polling once the video element is present and user started.
-    let video_ref = video_ref.clone();
-    video_ref.on_load({
-        let started = started.clone();
-        let scanning = scanning.clone();
-        let on_decoded = on_decoded.clone();
-        let on_error = on_error.clone();
-        move |video: web_sys::HtmlVideoElement| {
-            let started2 = started.clone();
-            let scanning2 = scanning.clone();
-            let on_decoded2 = on_decoded.clone();
-            let on_error2 = on_error.clone();
-            spawn_local(async move {
-                // Wait until the user presses Start.
-                while !started2.get() {
-                    gloo_timers::future::TimeoutFuture::new(200).await;
+    // Stop scanning and free the camera: halt decoding and stop every track of
+    // the acquired stream so the camera is released.
+    let release = move || {
+        scanning.set(false);
+        started.set(false);
+        if let Some(stream) = stream_holder.get_untracked() {
+            for track in stream.get_tracks().iter() {
+                if let Ok(track) = track.dyn_into::<web_sys::MediaStreamTrack>() {
+                    track.stop();
                 }
-                let window = web_sys::window().expect("window");
-                let nav = window.navigator();
-                let devices = nav.media_devices().map_err(|e| format!("{e:?}"));
-                let stream = match devices {
-                    Ok(dev) => {
-                        let c = web_sys::MediaStreamConstraints::new();
-                        let video = web_sys::MediaTrackConstraints::new();
-                        video.set_facing_mode_str("environment");
-                        c.set_video_media_track_constraints(&video);
-                        c.set_audio(&wasm_bindgen::JsValue::from_bool(false));
-                        let promise = dev
-                            .get_user_media_with_constraints(&c)
-                            .map_err(|e| format!("request failed: {e:?}"));
-                        match promise {
-                            Ok(p) => wasm_bindgen_futures::JsFuture::from(p)
-                                .await
-                                .map_err(|e| format!("denied: {e:?}"))
-                                .map(|v| v.dyn_into::<web_sys::MediaStream>().expect("stream")),
-                            Err(e) => Err(e),
-                        }
-                    }
-                    Err(e) => Err(e),
-                };
-                let stream = match stream {
-                    Ok(s) => s,
-                    Err(e) => {
-                        on_error.run(format!("could not access camera: {e}"));
-                        return;
-                    }
-                };
-                video.set_src_object(Some(&stream));
-                let _ = video.play();
+            }
+        }
+        stream_holder.set(None);
+        if let Some(video) = video_ref.get_untracked() {
+            video.set_src_object(None);
+        }
+    };
 
-                // Poll frames and decode.
-                let decoding = RwSignal::new(false);
-                let interval_closure = {
-                    let scanning3 = scanning2.clone();
-                    let decoding3 = decoding.clone();
-                    let on_decoded3 = on_decoded2.clone();
-                    let on_error3 = on_error2.clone();
-                    Closure::wrap(Box::new(move || {
-                        if !scanning3.get() || decoding3.get() {
+    let stop = move |_| release();
+
+    // Leaving the screen (back button, tab switch) unmounts this component
+    // without going through the Stop button, so release the camera here too and
+    // flag the frame loop to exit at its next tick.
+    on_cleanup(move || {
+        cancelled.set(true);
+        release();
+    });
+
+    // Begin camera + polling once the video element is present and user started.
+    video_ref.on_load(move |video: web_sys::HtmlVideoElement| {
+        spawn_local(async move {
+            // Wait until the user presses Start, giving up if the view is gone.
+            while !started.get_untracked() {
+                if cancelled.get_untracked() {
+                    return;
+                }
+                gloo_timers::future::TimeoutFuture::new(200).await;
+            }
+            let window = web_sys::window().expect("window");
+            let nav = window.navigator();
+            let devices = nav.media_devices().map_err(|e| format!("{e:?}"));
+            let stream = match devices {
+                Ok(dev) => {
+                    let c = web_sys::MediaStreamConstraints::new();
+                    let track = web_sys::MediaTrackConstraints::new();
+                    track.set_facing_mode_str("environment");
+                    // Ask for a small frame. These are bare values, so they are
+                    // treated as "ideal" and a device that cannot deliver them
+                    // still returns its closest match rather than failing.
+                    // A barcode only needs enough pixels to resolve the
+                    // narrowest bar, and every extra pixel is decode work.
+                    track.set_width_i32(CAPTURE_WIDTH);
+                    track.set_height_i32(CAPTURE_HEIGHT);
+                    track.set_frame_rate_f64(CAPTURE_FPS);
+                    c.set_video_media_track_constraints(&track);
+                    c.set_audio(&wasm_bindgen::JsValue::from_bool(false));
+                    let promise = dev
+                        .get_user_media_with_constraints(&c)
+                        .map_err(|e| format!("request failed: {e:?}"));
+                    match promise {
+                        Ok(p) => wasm_bindgen_futures::JsFuture::from(p)
+                            .await
+                            .map_err(|e| format!("denied: {e:?}"))
+                            .map(|v| v.dyn_into::<web_sys::MediaStream>().expect("stream")),
+                        Err(e) => Err(e),
+                    }
+                }
+                Err(e) => Err(e),
+            };
+            let stream = match stream {
+                Ok(s) => s,
+                Err(e) => {
+                    on_error.run(format!("could not access camera: {e}"));
+                    return;
+                }
+            };
+            // The view may have been torn down while permission was pending;
+            // in that case hand the camera straight back.
+            if cancelled.get_untracked() {
+                for track in stream.get_tracks().iter() {
+                    if let Ok(track) = track.dyn_into::<web_sys::MediaStreamTrack>() {
+                        track.stop();
+                    }
+                }
+                return;
+            }
+            stream_holder.set(Some(stream.clone()));
+            video.set_src_object(Some(&stream));
+            let _ = video.play();
+
+            // Wait for the video to actually hold a frame. readyState is the
+            // documented signal for this; non-zero dimensions can be reported
+            // before any pixels are available, which yields blank captures.
+            for _ in 0..50 {
+                if cancelled.get_untracked() {
+                    return;
+                }
+                if video.ready_state() >= web_sys::HtmlMediaElement::HAVE_CURRENT_DATA {
+                    break;
+                }
+                gloo_timers::future::TimeoutFuture::new(100).await;
+            }
+            if video.ready_state() < web_sys::HtmlMediaElement::HAVE_CURRENT_DATA {
+                on_error.run("camera did not start".to_string());
+                return;
+            }
+
+            let Some(preview) = preview_ref.get_untracked() else {
+                on_error.run("camera did not start".to_string());
+                return;
+            };
+
+            // Frame loop. Each pass runs to completion and only then schedules
+            // the next one, so a slow decode can never queue up behind itself
+            // and the loop self-throttles to whatever the device can manage.
+            loop {
+                if cancelled.get_untracked() || !scanning.get_untracked() {
+                    return;
+                }
+                if video.ready_state() >= web_sys::HtmlMediaElement::HAVE_CURRENT_DATA {
+                    match decode_video_frame(&video, &preview) {
+                        Ok(decoded) => {
+                            scanning.set(false);
+                            on_decoded.run(decoded);
                             return;
                         }
-                        decoding3.set(true);
-                        spawn_local({
-                            let scanning4 = scanning3.clone();
-                            let decoding4 = decoding3.clone();
-                            let on_decoded4 = on_decoded3.clone();
-                            let on_error4 = on_error3.clone();
-                            let video4 = video.clone();
-                            async move {
-                                let result = decode_video_frame(&video4);
-                                match result {
-                                    Ok(decoded) => {
-                                        decoding4.set(false);
-                                        scanning4.set(false);
-                                        on_decoded4.run(decoded);
-                                    }
-                                    Err(_) => {
-                                        decoding4.set(false);
-                                        let _ = on_error4;
-                                    }
-                                }
-                            }
-                        });
-                    }) as Box<dyn FnMut()>)
-                };
-                let _ = web_sys::window()
-                    .expect("window")
-                    .set_interval_with_callback_and_timeout_and_arguments_0(
-                        interval_closure.as_ref().unchecked_ref(),
-                        400,
-                    )
-                    .expect("set_interval");
-            });
-        }
+                        Err(e) => {
+                            // "no barcode found" is the normal state between
+                            // successful frames; log instead of surfacing to UI.
+                            log::debug!("scan frame: {e}");
+                        }
+                    }
+                }
+                // Yield to the browser so it can composite the live preview and
+                // process input before the next decode occupies the main thread.
+                gloo_timers::future::TimeoutFuture::new(FRAME_GAP_MS).await;
+            }
+        });
     });
 
     view! {
         <div>
-            <video node_ref=video_ref autoplay=true playsinline=true muted=true></video>
+            // The video is shown directly, so the preview is composited by the
+            // browser at full frame rate and stays smooth no matter how long a
+            // decode takes. The canvas is only a scratch buffer for capture.
+            <video node_ref=video_ref autoplay=true playsinline=true muted=true class="camera-preview"></video>
+            <canvas node_ref=preview_ref class="camera-scratch"></canvas>
             <div>
-                <button class="btn" on:click=start>{move || if started.get() { "Scanning…" } else { "Start camera" }}</button>
+                <Show when=move || !started.get() fallback=|| ()>
+                    <button class="btn" on:click=start>"Start camera"</button>
+                </Show>
+                <Show when=move || started.get() fallback=|| ()>
+                    <button class="btn secondary" on:click=stop>"Stop scanning"</button>
+                </Show>
             </div>
         </div>
     }
 }
 
-fn decode_video_frame(video: &web_sys::HtmlVideoElement) -> Result<decode::Decoded, String> {
-    let document = web_sys::window()
-        .ok_or("no window")?
-        .document()
-        .ok_or("no document")?;
-    let canvas: web_sys::HtmlCanvasElement = document
-        .create_element("canvas")
-        .map_err(|_| "no canvas")?
-        .dyn_into()
-        .map_err(|_| "no canvas")?;
-    canvas.set_width(video.video_width());
-    canvas.set_height(video.video_height());
-    let ctx = canvas
-        .get_context("2d")
+/// Frame size requested from the camera.
+const CAPTURE_WIDTH: i32 = 640;
+const CAPTURE_HEIGHT: i32 = 480;
+const CAPTURE_FPS: f64 = 15.0;
+
+/// Pause between the end of one decode and the start of the next.
+const FRAME_GAP_MS: u32 = 60;
+
+fn decode_video_frame(
+    video: &web_sys::HtmlVideoElement,
+    preview: &web_sys::HtmlCanvasElement,
+) -> Result<decode::Decoded, String> {
+    let width = video.video_width();
+    let height = video.video_height();
+    if width == 0 || height == 0 {
+        return Err("video not ready".into());
+    }
+
+    // Draw at the size the decoder works at, so it never has to rescale.
+    let longest = width.max(height);
+    let (draw_w, draw_h) = if longest > decode::MAX_SIDE {
+        let scale = decode::MAX_SIDE as f64 / longest as f64;
+        (
+            (width as f64 * scale).round().max(1.0) as u32,
+            (height as f64 * scale).round().max(1.0) as u32,
+        )
+    } else {
+        (width, height)
+    };
+
+    if preview.width() != draw_w {
+        preview.set_width(draw_w);
+    }
+    if preview.height() != draw_h {
+        preview.set_height(draw_h);
+    }
+
+    // willReadFrequently keeps the canvas backing store on the CPU. Without it
+    // the per-frame getImageData below forces a GPU readback every time.
+    let options = js_sys::Object::new();
+    js_sys::Reflect::set(
+        &options,
+        &wasm_bindgen::JsValue::from_str("willReadFrequently"),
+        &wasm_bindgen::JsValue::TRUE,
+    )
+    .map_err(|_| "no ctx")?;
+    let ctx = preview
+        .get_context_with_context_options("2d", &options)
         .map_err(|_| "no ctx")?
-        .ok_or_else(|| "no ctx")?
+        .ok_or("no ctx")?
         .dyn_into::<web_sys::CanvasRenderingContext2d>()
         .map_err(|_| "no ctx")?;
-    ctx.draw_image_with_html_video_element(video, 0.0, 0.0)
-        .map_err(|_| "draw failed")?;
-    let data_url = canvas.to_data_url().map_err(|_| "toDataURL failed")?;
-    let bytes = data_url_to_bytes(&data_url);
-    if bytes.is_empty() {
-        return Err("empty image".into());
-    }
-    decode::decode_from_bytes(&bytes)
-}
-
-fn data_url_to_bytes(url: &str) -> Vec<u8> {
-    // data:image/png;base64,....
-    let Some(comma) = url.find(',') else {
-        return Vec::new();
-    };
-    let b64 = &url[comma + 1..];
-    let Some(window) = web_sys::window() else {
-        return Vec::new();
-    };
-    window
-        .atob(b64)
-        .ok()
-        .map(|decoded| decoded.bytes().collect())
-        .unwrap_or_default()
+    ctx.draw_image_with_html_video_element_and_dw_and_dh(
+        video, 0.0, 0.0, draw_w as f64, draw_h as f64,
+    )
+    .map_err(|_| "draw failed")?;
+    let image_data = ctx
+        .get_image_data(0.0, 0.0, draw_w as f64, draw_h as f64)
+        .map_err(|_| "getImageData failed")?;
+    let rgba: Vec<u8> = image_data.data().0;
+    decode::decode_from_rgba(draw_w, draw_h, &rgba)
 }
 
 #[component]
