@@ -105,6 +105,7 @@ fn Menu(state: AppState, on_close: Callback<()>) -> impl IntoView {
     let import_ref = NodeRef::<leptos::html::Input>::new();
     let summary = RwSignal::new(None::<crate::model::ImportSummary>);
     let error = RwSignal::new(None::<String>);
+    let notice = RwSignal::new(None::<String>);
     let close = move || on_close.run(());
 
     // Export: serialize the current collection and trigger a download.
@@ -154,6 +155,20 @@ fn Menu(state: AppState, on_close: Callback<()>) -> impl IntoView {
 
     let version = env!("CARGO_PKG_VERSION");
 
+    // Share App: open the native share sheet with the app's canonical link, or
+    // copy the link as a fallback when Web Share is unavailable.
+    let do_share = move || {
+        spawn_local(async move {
+            match share_app().await {
+                ShareOutcome::Shared => {}
+                ShareOutcome::Copied => notice.set(Some("Link copied to clipboard".to_string())),
+                ShareOutcome::Unsupported => {
+                    error.set(Some("Sharing is not supported here, and linking failed".to_string()))
+                }
+            }
+        });
+    };
+
     view! {
         <div class="menu-overlay" on:click=move |_| close()>
             <div class="menu-sheet" on:click=move |ev| ev.stop_propagation()>
@@ -167,6 +182,9 @@ fn Menu(state: AppState, on_close: Callback<()>) -> impl IntoView {
                 </button>
                 <button class="menu-item" on:click={let close = close.clone(); move |_| { close(); do_export(); }}>
                     "Export"
+                </button>
+                <button class="menu-item" on:click=move |_| do_share()>
+                    "Share app"
                 </button>
                 <button class="menu-item" on:click={let st = state.clone(); move |_| st.screen.set(Screen::About)}>
                     "About"
@@ -195,6 +213,10 @@ fn Menu(state: AppState, on_close: Callback<()>) -> impl IntoView {
                     </div>
                 </Show>
 
+                <Show when=move || notice.get().is_some() fallback=|| ()>
+                    <div class="menu-message">{move || notice.get().unwrap_or_default()}</div>
+                </Show>
+
                 <Show when=move || error.get().is_some() fallback=|| ()>
                     <div class="menu-message error">{move || error.get().unwrap_or_default()}</div>
                 </Show>
@@ -202,6 +224,72 @@ fn Menu(state: AppState, on_close: Callback<()>) -> impl IntoView {
                 <div class="menu-version">"Version " {version}</div>
             </div>
         </div>
+    }
+}
+
+/// Canonial, installable URL for the app, used when sharing.
+const APP_URL: &str = "https://barcode-wallet.bneijt.nl/";
+
+/// Result of trying to share the app link.
+enum ShareOutcome {
+    /// The native share sheet handled it.
+    Shared,
+    /// Web Share was unavailable, so the link was copied to the clipboard.
+    Copied,
+    /// Neither sharing nor copying could be done.
+    Unsupported,
+}
+
+/// Share the app via the native share sheet, falling back to copying the link.
+///
+/// The Web Share API only exists in secure contexts and only wants to be called
+/// from a user gesture, so both call sites here are an awaited click handler.
+async fn share_app() -> ShareOutcome {
+    let Some(window) = web_sys::window() else {
+        return ShareOutcome::Unsupported;
+    };
+    let navigator = window.navigator();
+
+    // Feature-detect navigator.share; the web-sys binding is not `catch`, so
+    // calling it on a browser without the API would throw before returning a
+    // Promise.
+    let share_present = js_sys::Reflect::get(&navigator, &wasm_bindgen::JsValue::from_str("share"))
+        .map(|v| !v.is_undefined() && !v.is_null())
+        .unwrap_or(false);
+
+    if share_present {
+        let data = web_sys::ShareData::new();
+        data.set_title("Barcode Wallet");
+        data.set_text("Barcode Wallet – store and display your loyalty barcodes.");
+        data.set_url(APP_URL);
+        let promise = navigator.share_with_data(&data);
+        let result = wasm_bindgen_futures::JsFuture::from(promise).await;
+        match result {
+            Ok(_) => return ShareOutcome::Shared,
+            Err(e) => {
+                // AbortError means the user dismissed the sheet; not a failure.
+                if let Ok(dom) = e.dyn_into::<web_sys::DomException>() {
+                    if dom.name() == "AbortError" {
+                        return ShareOutcome::Shared;
+                    }
+                }
+                // Otherwise fall through to the clipboard fallback.
+            }
+        }
+    }
+
+    // Fallback: copy the link to the clipboard.
+    let clipboard_present =
+        js_sys::Reflect::get(&navigator, &wasm_bindgen::JsValue::from_str("clipboard"))
+            .map(|v| !v.is_undefined() && !v.is_null())
+            .unwrap_or(false);
+    if !clipboard_present {
+        return ShareOutcome::Unsupported;
+    }
+    let promise = navigator.clipboard().write_text(APP_URL);
+    match wasm_bindgen_futures::JsFuture::from(promise).await {
+        Ok(_) => ShareOutcome::Copied,
+        Err(_) => ShareOutcome::Unsupported,
     }
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "barcode-wallet"
-version = "1.0.1"
+version = "1.0.2"
 edition = "2024"
 
 [lib]
@@ -42,6 +42,9 @@ web-sys = { version = "0.3", features = [
     "Url",
     "HtmlMediaElement",
     "ServiceWorkerContainer",
+    "ShareData",
+    "Clipboard",
+    "DomException",
 ] }
 js-sys = "0.3"
 serde = { version = "1", features = ["derive"] }
