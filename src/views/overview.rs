@@ -173,7 +173,10 @@ fn Menu(state: AppState, on_close: Callback<()>) -> impl IntoView {
         <div class="menu-overlay" on:click=move |_| close()>
             <div class="menu-sheet" on:click=move |ev| ev.stop_propagation()>
                 <button class="menu-item" on:click=move |_| {
-                    close();
+                    // Deliberately keep the menu open: the file input lives
+                    // inside it, and the import result message is shown there.
+                    // Closing first detaches the input, which can silently
+                    // swallow the `change` event on some mobile browsers.
                     if let Some(input) = import_ref.get() {
                         let _ = input.click();
                     }
@@ -197,7 +200,14 @@ fn Menu(state: AppState, on_close: Callback<()>) -> impl IntoView {
                     class="hidden-input"
                     on:change=move |ev| {
                         do_import();
-                        let _ = ev;
+                        // Clear the selection so choosing the same file again
+                        // fires a `change` event on the next pick.
+                        if let Some(input) = ev
+                            .target()
+                            .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                        {
+                            input.set_value("");
+                        }
                     }
                 />
 

@@ -345,8 +345,16 @@ button {
   color: var(--muted);
 }
 
+/* Visually hidden but still laid out: `display: none` on a file input can stop
+   programmatic .click() from opening the picker on some mobile browsers. */
 .hidden-input {
-  display: none;
+  position: absolute;
+  left: -10000px;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* ---------- Forms ---------- */
