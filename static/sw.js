@@ -1,4 +1,8 @@
-const CACHE = "barcode-wallet-v1";
+// The app registers this worker as /sw.js?v=<version>. Deriving the cache name
+// from the URL keeps this file static while rotating the cache on each release
+// (old caches are pruned on activate, keeping hashed assets from accumulating).
+const VERSION = new URLSearchParams(self.location.search).get("v") || "dev";
+const CACHE = `barcode-wallet-${VERSION}`;
 const ASSETS = [
   "/",
   "/manifest.webmanifest",

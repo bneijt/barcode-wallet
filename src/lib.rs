@@ -47,7 +47,9 @@ fn register_service_worker() {
         return;
     }
     let sw: web_sys::ServiceWorkerContainer = sw.unchecked_into();
-    let promise = sw.register("/sw.js");
+    // Version in the registration URL busts HTTP caches and forces the browser
+    // to re-check the script whenever Cargo.toml's version changes.
+    let promise = sw.register(&format!("/sw.js?v={}", env!("CARGO_PKG_VERSION")));
     let _ = wasm_bindgen_futures::JsFuture::from(promise);
 }
 
